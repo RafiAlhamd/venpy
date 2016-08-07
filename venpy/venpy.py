@@ -35,6 +35,9 @@ class VenPy(object):
 
 
     def __init__(self, model, dll):
+
+        self.model = model
+
         #Get bitness and OS
         bit, opsys = platform.architecture()
 
@@ -47,6 +50,7 @@ class VenPy(object):
 
         #Get path to Vensim dll
         path = util.find_library(dll)
+        self.path = path
 
         #Make sure OS is Windows
         if "Windows" not in opsys:
@@ -56,14 +60,10 @@ class VenPy(object):
             raise IOError("Could not find Vensim DLL '%s'" % dll)
 
         #Load Vensim dll
-        try:
-            self.dll = ctypes.windll.LoadLibrary(path)
-        except Exception as e:
-            print(e)
-            print("'%s' could not be loaded using the path '%s'" % (dll, path))
+        self._load_dll()
 
         #Load compiled vensim model
-        self.cmd("SPECIAL>LOADMODEL|%s" % model)
+        self.cmd("SPECIAL>LOADMODEL|%s" % self.model)
 
         #Get all variable names from model based on type
         types = {1: 'level', 2: 'aux', 3: 'data', 4: 'init', 5: 'constant',
@@ -144,6 +144,17 @@ class VenPy(object):
             message = "Unsupported type '%s' passed to __setitem__ for Venim" \
                       "variable '%s'." % (type(val), key)
             raise TypeError(message)
+
+
+    def reload(self):
+        if not self.dll:
+            self._load_dll()
+            self.cmd("SPECIAL>LOADMODEL|%s" % self.model)
+
+
+    def unload(self):
+        ctypes.windll.kernel32.FreeLibrary(self.dll._handle)
+        self.dll = None
 
 
     def run(self, runname='Run', interval=1):
@@ -293,6 +304,14 @@ class VenPy(object):
         return pd.DataFrame(result, index=np.array(tval))
 
 
+    def _load_dll(self):
+        try:
+            self.dll = ctypes.windll.LoadLibrary(self.path)
+        except Exception as e:
+            msg = "'%s' could not be loaded using the path '%s'" % (self.dll, self.path)
+            print(e, msg, sep='\n')
+
+
     def _run_udfs(self):
         for key in self.components:
             #Ensure only gaming type variables can be set during sim
@@ -373,4 +392,3 @@ def _c_char_to_list(res):
     
 def _prepstr(in_str):
     return in_str if isinstance(in_str, bytes) else in_str.encode('utf-8')
-    
