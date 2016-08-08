@@ -9,6 +9,7 @@ from ctypes import util
 import platform
 import re
 from itertools import product
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -34,7 +35,7 @@ def load(model, dll='vendll32.dll'):
 class VenPy(object):
 
 
-    def __init__(self, model, dll):
+    def __init__(self, model, vendll):
 
         self.model = model
 
@@ -45,11 +46,11 @@ class VenPy(object):
         nums = lambda X: "".join(x for x in X if str.isdigit(x))
 
         #Assert same bitness of Python and Vensim
-        assert nums(dll) == nums(bit), \
-        "%s version of Python will not work with %s" % (bit, dll)
+        assert nums(vendll) == nums(bit), \
+        "%s version of Python will not work with %s" % (bit, vendll)
 
         #Get path to Vensim dll
-        path = util.find_library(dll)
+        path = util.find_library(vendll)
         self.path = path
 
         #Make sure OS is Windows
@@ -57,7 +58,7 @@ class VenPy(object):
             raise OSError("Not supported for %s" % opsys)
         #Test if path was obtained for Vensim dll
         elif not path:
-            raise IOError("Could not find Vensim DLL '%s'" % dll)
+            raise IOError("Could not find Vensim DLL '%s'" % vendll)
 
         #Load Vensim dll
         self._load_dll()
@@ -153,7 +154,9 @@ class VenPy(object):
 
 
     def unload(self):
-        ctypes.windll.kernel32.FreeLibrary(self.dll._handle)
+        handle = self.dll._handle
+        del self.dll
+        ctypes.windll.kernel32.FreeLibrary(handle)
         self.dll = None
 
 
@@ -302,6 +305,71 @@ class VenPy(object):
             result[v] = np.array(vval)
 
         return pd.DataFrame(result, index=np.array(tval))
+
+
+    def get_state(self, attime):
+        """Get the Vensim model state of the current run at a given time. This
+        method in conjunction with `set_state` can be used to resume a model
+        run.
+
+        Parameters
+        ----------
+        attime : {float, int}
+            The time from which to obtain the model state.
+
+        Returns
+        -------
+        state : ndarray
+            Model state in the form of an array for use with `set_state.`
+        maxn : int
+            Size of the state array.
+        """
+        attime = ctypes.c_float(attime)
+
+        maxn = self.dll.vensim_get_state(_prepstr(self.runname),
+                                         ctypes.byref(attime),
+                                         None, 0)
+
+        if maxn < 0:
+            raise ValueError("Negative buffer length received for state vector.")
+
+        state = (ctypes.c_float * maxn)()
+        success = self.dll.vensim_get_state(_prepstr(self.runname),
+                                            ctypes.byref(attime),
+                                            state, maxn)
+
+        if success == 0:
+            warnings.warn("Warning: Current model state is empty.")
+        elif success < 0:
+            raise ValueError("vensim_get_state for time %s failed with exit " \
+                             "code %s" % (attime, success))
+
+        return np.array(state), maxn
+
+
+    def set_state(self, state, maxn):
+        """Sets the initial state of a Vensim model to resume from a given
+        point. Intended for use with `get_state`.
+
+        Parameters
+        ----------
+        state : ndarray
+            The state array returned from `get_state`.
+        maxn : int
+            Size of the state array returned from `get_state`.
+
+        Returns
+        -------
+        success : int
+            Value returned from Vensim after setting state. Used for testing
+            purposes.
+        """
+        success = self.dll.vensim_set_state(state.ctypes.data, maxn)
+
+        if success < 0:
+            raise ValueError("Model state could not be set.")
+
+        return success
 
 
     def _load_dll(self):
